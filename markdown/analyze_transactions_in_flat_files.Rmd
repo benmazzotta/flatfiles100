@@ -1,0 +1,148 @@
+---
+title: "Analyze Transactions from Flat Files"
+output: 
+  html_notebook:
+    code_folding: "hide"
+author: Ben Mazzotta
+date: 9/6/2018
+---
+
+## Introduction
+
+From time to time BFA crunches statistics on large flat files of transactions.
+
+
+```{r prelims, warning=FALSE}
+library(tidyverse)
+library(purrr)
+set.seed(1010101010)
+
+## Global thousands separator
+knitr::knit_hooks$set(inline = function(x) {
+prettyNum(x, big.mark=",")
+})
+
+rm(list=ls())
+
+setwd("../data")
+```
+
+
+## Calculate balances
+
+Now that we have initial balances on disk and ten transaction blocks, let's calculate some things using all the transaction blocks.
+
+```{r balances, warning=FALSE}
+setwd("../data")
+
+print("Initial balances read from deposits file.")
+balances <- read_csv("initialdeposits.csv") %>% 
+  transmute(accountID=credit,
+            time=max(time),
+            balance=amount, 
+            chunk=0)
+
+print("Initial balances saved to disk.")
+write_csv(balances, path="../data/balances_t_0.csv")
+# summary(balances)
+# head(balances)
+
+# trx = NULL 
+
+print("Read transactions from a flat file.")
+## Recover some transactions from a chunk
+trx <- read_csv("../data/trx_block_1.csv", progress = FALSE) 
+
+# trx_long <- trx %>%  
+# # trx %>% 
+#   # select(-trxtype) %>% 
+#   gather(key="CrDr", value="accountID", credit, debit)
+
+print("Calculate running balances.")
+## Create individual transaction histories
+trx_crvalues <- trx %>% 
+  gather(key="CrDr", value="accountID", credit, debit) %>% 
+  mutate(amount_ascredit = ifelse(CrDr=="credit", amount, -amount)) %>% 
+  arrange(time, accountID)
+
+## Bind transaction rows to balances
+balances_update <- filter(balances, chunk==0) %>% select(-chunk) %>% rename(amount_ascredit= balance)
+
+balances_update %<>% bind_rows(trx_crvalues) %>%
+  group_by(accountID) %>%
+  arrange(time) %>%
+  mutate(balance = cumsum(amount_ascredit)) %>% 
+  ungroup() %>% 
+  arrange(accountID, time)
+
+print("Filter final balances.")
+glimpse(balances_update)
+
+
+## Export final balances by individual
+balance_chunk1 <- balances_update %>% 
+  group_by(accountID) %>% 
+  arrange(time) %>% 
+  slice(n()) %>% 
+  ungroup() %>% 
+  filter(accountID != "CASH") %>% 
+  mutate(time=max(time),
+         chunk=1) %>% 
+  select(names(balances))
+
+print("End of period balances for periods 0-1.")
+balances <- bind_rows(balances, balance_chunk1)
+glimpse(balances)
+
+## Write to disk
+write_csv(balances, path="../data/balances_t_1.csv")
+print("Balances saved to disk.")
+
+# glimpse(trx_crvalues)
+# 
+# table(trx_crvalues$CrDr, trx_crvalues$amount_ascredit > 0 )
+# 
+# dim(trx)
+# dim(trx_long)
+# glimpse(trx_long)
+# 
+# glimpse(trx)
+# glimpse(trx_long)
+# 
+# filter(trx, trxtype=="deposit") %>% glimpse()
+# filter(trx, trxtype=="withdrawal") %>% glimpse()
+```
+
+
+## Cash turnover
+
+Calculate daily cash in, cash out, average transaction sizes.
+
+```{r cash-turnover, warning=F}
+
+
+# Go back to TRX
+# Grab daily cash deposits
+daily_deposits <- trx %>% filter(debit=="CASH") %>% 
+  group_by(date = as.Date(time)) %>% 
+  summarise(daily_deposit = sum(amount),
+            mean_deposit = mean(amount)) 
+# print(daily_deposits, digits=1) 
+knitr::kable(daily_deposits, digits=1, format.args= c(big.mark=","))
+
+# Grab daily cash withdrawals
+daily_withdrawals <- trx %>% filter(credit=="CASH") %>%
+  group_by(date=as.Date(time)) %>% 
+  summarise(daily_withdrawal = sum(amount),
+            mean_withdrawal = mean(amount))
+# print(daily_withdrawals)
+knitr::kable(daily_deposits, digits=1, format.args= c(big.mark=","))
+
+daily_cash_stats <- full_join(daily_deposits, daily_withdrawals)
+
+write_csv(daily_cash_stats, path="../data/daily_cash_stats_t_1.csv")
+print("Daily cash stats saved to disk.")
+
+
+```
+

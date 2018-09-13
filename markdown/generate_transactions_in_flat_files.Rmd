@@ -1,0 +1,102 @@
+---
+title: "R Notebook"
+output: html_notebook
+author: Ben Mazzotta
+date: 6 September 2018
+---
+
+
+## Introduction
+
+BFA needs an analyst that can conduct calculations on flat files broken in to contiguous chunks. In other words, hundreds of flat files contain the same fields, and sequential observations in a long time series of (for example) transactions in a payments system. When BFA needs to calcalate aggregates, it must process these flat files to obtain results. 
+
+For example: 
+
+- Calculate average transaction sizes 
+- Calculate average daily balances
+- Daily value added to the system
+- Daily value withdrawn from the system
+
+
+To wit, this program creates a tiny model of the same problem. It begins by creating 1 thousand users. Each user can add value (i.e., deposit some cash), withdraw value (i.e., take out some cash), and transfer money. Every payment has a debit and a credit account. 
+
+For the moment, negative balances are allowed. In other words, borrowing cash on credit is no problem, and sending money on credit is no problem. 
+
+For the moment, we ignore time and simply create ten chunks of one million transactions each.
+
+
+```{r}
+library(tidyverse)
+library(purrr)
+setwd("../data")
+
+## Random seed
+set.seed(10101010)
+
+## How many accounts do we want? 
+n_accounts = 1000
+## How large an ID field would we like? 
+account_idsize = 6
+
+## Generate userIDs by sampling a uniform distribution without replacement
+##   10^account_idsize is the upper limit of the account_id space
+##   n_accounts is the size sample to draw
+##   sample without replacement
+##   convert to character and pad with leading zero if necessary
+accountID <- sample(c(1:10^account_idsize)-1, n_accounts, replace = FALSE) %>% 
+  as.character() %>% 
+  str_pad(width=6, side="left", pad="0")
+
+
+time_origin = "2000-07-01 12:00:00"
+
+
+## Generate initial deposits
+##    This looks liks a set of transactions debit "cash" and credit "accountID" in the amount "amount"
+
+initialdeposits <- tibble("debit" = "CASH", "credit" = accountID) %>% 
+  mutate("amount" = round(rlnorm(n_accounts, 6, 2)),
+         "time" = as.POSIXct(1:n_accounts, origin=time_origin, tz="EST"))
+
+summary(initialdeposits)
+
+write_csv(initialdeposits, path="../data/initialdeposits.csv")
+write_csv(tibble(accountID), path="../data/accountID_list.csv")
+
+```
+
+
+## Transactions
+
+
+Now that we have initialized the user accounts with deposits from "CASH" to their own accounts, we should generate ten chunks of one million transactions.
+
+```{r transactionblocks}
+
+n_trx_per_block = 10^6
+n_blocks = 10
+
+for (i in 1:n_blocks) {
+  ## Randomize transaction types
+  trxtype = sample(c("deposit","withdrawal","payment"), size=n_trx_per_block, prob = c(.25,.1,1-.35), replace=TRUE)
+  ## Seqeuential trnasactions
+  ## If deposit then from CASH, if withdrawal then to CASH
+  ## Otherwise credit and debit accountIDs
+  ## Amount normally distributed N(100,20)
+  ## timestamps sequential with blocks spaced apart by 10X block size
+  trx = tibble(trxtype=trxtype) %>% 
+    mutate(debit = ifelse(test = trxtype=="deposit", "CASH", sample(accountID)),
+           credit = ifelse(test = trxtype=="withdrawal", "CASH", sample(accountID)),
+           amount = round(rnorm(n=n_trx_per_block, mean=100, sd=20)),
+           time=  as.POSIXct(c(1:n_trx_per_block) - 1 + i * 10 * n_trx_per_block, origin=time_origin, tz="EST"))
+  write_csv(trx, path=paste0("../data/trx_block_", i,".csv"))
+  cat("File chunk ", i, "saved to disk. at ", paste0("trx_block_",i,".csv") , " \n")
+}
+
+```
+
+## Ready to calculate balances 
+
+Removing the rest of this file to a second notebook. I don't want to recompile this data generator anymore unless I need to. 
+
+
