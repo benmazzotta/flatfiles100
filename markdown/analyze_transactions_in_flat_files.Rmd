@@ -30,13 +30,13 @@ setwd("../data")
 
 ## Calculate balances
 
-Now that we have initial balances on disk and ten transaction blocks, let's calculate some things using all the transaction blocks.
+Now that we have initial balances on disk and ten transaction blocks, let's calculate running balances on a single transaction block.
 
 ```{r balances, warning=FALSE}
 setwd("../data")
 
 print("Initial balances read from deposits file.")
-balances <- read_csv("initialdeposits.csv") %>% 
+balances <- read_csv("initialdeposits.csv", col_types="cciT") %>% 
   transmute(accountID=credit,
             time=max(time),
             balance=amount, 
@@ -51,7 +51,7 @@ write_csv(balances, path="../data/balances_t_0.csv")
 
 print("Read transactions from a flat file.")
 ## Recover some transactions from a chunk
-trx <- read_csv("../data/trx_block_1.csv", progress = FALSE) 
+trx <- read_csv("../data/trx_block_1.csv", progress = FALSE, col_types="ccciT") 
 
 # trx_long <- trx %>%  
 # # trx %>% 
@@ -114,14 +114,125 @@ print("Balances saved to disk.")
 ```
 
 
+### Lather, rinse, repeat
+
+Here is the same process for all the transaction blocks
+
+```{r balances_over_all_blocks, warning=FALSE}
+
+## Pseudocode: 
+#   1. Load transactions
+#   2. Calculate running balances
+#   3. Append final balances to starting balances
+
+
+## Define functions
+## Function for step 1 load transactions
+f_trxloader <- function(blockid) {
+  ### trx: This function reads a flat file of transactions 
+  cat("Loading transaction block", blockid, "....\n")
+  trx <- read_csv(paste0("../data/trx_block_", blockid, ".csv"), progress = FALSE, col_types="ccciT") 
+  return(trx)
+}
+
+## Function for step 2 calculate running balances
+f_runningbalances <- function(trxblock, blockid) {
+  ### balances_blockend: This function calculates running balances from a transaction block and initial balances. 
+  ## Load last balances from CSV
+  balances_blockstart <- read_csv(paste0("balances_t_", blockid-1, ".csv"), col_types="cTii") %>% 
+    filter(chunk==max(chunk)) %>% 
+    select(-chunk) %>% 
+    rename(amount_ascredit= balance)
+  # glimpse(balances_blockstart)
+  ## Calculate every credit and debit 
+  trx_crvalues <- trxblock %>% gather(key="CrDr", value="accountID", credit, debit) %>% 
+    mutate(amount_ascredit = ifelse(CrDr=="credit", amount, -amount)) %>% 
+    arrange(time, accountID)
+  ## Calculate running balances
+  balances_blockstart %<>% bind_rows(trx_crvalues) %>%
+    group_by(accountID) %>%
+    arrange(time) %>%
+    mutate(balance = cumsum(amount_ascredit)) %>% 
+    ungroup() %>% 
+    arrange(accountID, time)
+  # glimpse(balances_blockstart)
+  ## Return final balances 
+  balances_blockend <- balances_blockstart %>% 
+    group_by(accountID) %>% 
+    arrange(time) %>% 
+    slice(n()) %>% 
+    ungroup() %>% 
+    filter(accountID != "CASH") %>% 
+    mutate(time=max(time),
+           chunk=blockid) %>% 
+    select(names(balances))
+  print("Final balances complete.")
+  # glimpse(balances_blockend)
+  return(balances_blockend)
+}
+
+f_appendbalances <- function(blockid, balances_blockend) {
+  ## This function appends final balances from a block to the running block end balances and saves to disk.
+  ## Read the last 99 chunks of balances into rolling balances
+  ##      Why not all time? Eventually the file size will blow up.
+  balances_rolling100 <- read_csv(paste0("balances_t_", blockid-1, ".csv"), col_types="cTii") %>% 
+    filter(chunk >= max(chunk)-98)
+  ## Append balances_blockend
+  print("End of period balances for current period.")
+  balances_rolling100 <- bind_rows(balances_rolling100, balances_blockend)
+  # glimpse(balances_rolling100)
+  ## Write to disk
+  write_csv(balances_rolling100, path=paste0("../data/balances_t_", blockid,".csv"))
+  print("Balances saved to disk.")
+}
+
+## ########
+## Now loop over the functions
+
+
+setwd("../data")
+## Load initial balances 
+
+balances <- read_csv("initialdeposits.csv", col_types="cciT") %>% 
+  transmute(accountID=credit,
+            time=max(time),
+            balance=amount, 
+            chunk=0)
+
+print("Initial balances saved to disk.")
+write_csv(balances, path="../data/balances_t_0.csv")
+# summary(balances)
+# head(balances)
+
+## For loop
+
+print("Calculate the number of blocks.")
+n_blocks <- list.files() %>% str_detect("trx_block_\\d+.csv") %>% sum()
+
+for(blockcounter in 1:n_blocks) {
+  ## Call f_trxloader; single argument is blockid
+ trx <- f_trxloader(blockid=blockcounter) 
+ ## Call f_runningbalances: arguments are trxblock and blockid
+ balances_current <- f_runningbalances(trxblock=trx, blockid=blockcounter)
+ ## Call f_appendbalances: arguments are blockid and balances_blockend
+ f_appendbalances(blockid=blockcounter, balances_blockend=balances_current)
+}
+  
+
+
+
+```
+
+
 ## Cash turnover
 
 Calculate daily cash in, cash out, average transaction sizes.
 
 ```{r cash-turnover, warning=F}
-
-
+setwd("../data")
 # Go back to TRX
+trx <- read_csv("trx_block_1.csv", col_types="ccciT", progress=FALSE)
+
 # Grab daily cash deposits
 daily_deposits <- trx %>% filter(debit=="CASH") %>% 
   group_by(date = as.Date(time)) %>% 
@@ -143,6 +254,50 @@ daily_cash_stats <- full_join(daily_deposits, daily_withdrawals)
 write_csv(daily_cash_stats, path="../data/daily_cash_stats_t_1.csv")
 print("Daily cash stats saved to disk.")
 
+## Now repeat on 100 transaction blocks. 
+
+## Define the function
+f_dailycashstats <- function(trxblock) {
+  ### This function calculates daily cash deposits and withdrawals on a block of transactions. 
+  ## Problem: if blocks were contiguous, then we would need to slice from two CSVs to aggregate on common dates. 
+  ##   as long as they are not contiguous, no problem. 
+  ## Deposits first: sum amounts for all payments from CASH
+  daily_deposits <- filter(trxblock, debit=="CASH") %>%
+    group_by(date=as.Date(time)) %>% 
+    summarise(daily_deposit = sum(amount),
+              mean_deposit=mean(amount))
+  ## Withdrawals next: sum amounts for all payments to CASH
+  daily_withdrawals <- filter(trxblock, credit=="CASH") %>%
+  group_by(date=as.Date(time)) %>% 
+  summarise(daily_withdrawal = sum(amount),
+            mean_withdrawal = mean(amount))
+  daily_cash_stats <- full_join(daily_deposits, daily_withdrawals)
+  return(daily_cash_stats)
+}
+
+## Initialize on first block
+
+trx <- read_csv("trx_block_1.csv", col_types="ccciT")
+f_dailycashstats(trxblock = trx)
+
+## Calculate the number of blocks from CSV names
+n_blocks <- list.files() %>% str_detect("trx_block_\\d+.csv") %>% sum()
+
+
+## Loop over trx blocks 2:n
+for(blockcounter in 2:n_blocks) {
+  ## This loop calculates the daily cash in and out for each TRX block, then appends them to the running daily averages
+  ## Read the transactions from disk
+  cat("Loading transaction block", blockcounter,"....\n")
+  trx <- read_csv(paste0("trx_block_",blockcounter,".csv"), col_types="ccciT", progress = FALSE)
+  ## Calculate daily deposits and withdrawals
+  current_block_cash <- f_dailycashstats(trxblock = trx)
+  ## Join to prior 
+  daily_cash_stats <- bind_rows(daily_cash_stats, current_block_cash)
+  print("Daily cash averages complete.")
+}
+
+write_csv(daily_cash_stats, path="../data/daily_cash_stats.csv")
 
 ```
 

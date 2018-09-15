@@ -74,7 +74,7 @@ Now that we have initialized the user accounts with deposits from "CASH" to thei
 ```{r transactionblocks}
 
 n_trx_per_block = 10^6
-n_blocks = 10
+n_blocks = 100
 
 for (i in 1:n_blocks) {
   ## Randomize transaction types
