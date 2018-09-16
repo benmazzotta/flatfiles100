@@ -4,7 +4,7 @@ output:
   html_notebook:
     code_folding: "hide"
 author: Ben Mazzotta
-date: 9/6/2018
+date: September 15, 2018
 ---
 
 ## Introduction
@@ -36,7 +36,7 @@ Now that we have initial balances on disk and ten transaction blocks, let's calc
 setwd("../data")
 
 print("Initial balances read from deposits file.")
-balances <- read_csv("initialdeposits.csv", col_types="cciT") %>% 
+balances <- read_csv("initialdeposits.csv", col_types="cciT", progress = FALSE) %>% 
   transmute(accountID=credit,
             time=max(time),
             balance=amount, 
@@ -173,16 +173,16 @@ f_runningbalances <- function(trxblock, blockid) {
 
 f_appendbalances <- function(blockid, balances_blockend) {
   ## This function appends final balances from a block to the running block end balances and saves to disk.
-  ## Read the last 99 chunks of balances into rolling balances
+  ## Read the last 19 chunks of balances into rolling balances
   ##      Why not all time? Eventually the file size will blow up.
-  balances_rolling100 <- read_csv(paste0("balances_t_", blockid-1, ".csv"), col_types="cTii") %>% 
-    filter(chunk >= max(chunk)-98)
+  balances_rolling20 <- read_csv(paste0("balances_t_", blockid-1, ".csv"), col_types="cTii") %>% 
+    filter(chunk >= max(chunk)-18)
   ## Append balances_blockend
   print("End of period balances for current period.")
-  balances_rolling100 <- bind_rows(balances_rolling100, balances_blockend)
-  # glimpse(balances_rolling100)
+  balances_rolling20 <- bind_rows(balances_rolling20, balances_blockend)
+  # glimpse(balances_rolling20)
   ## Write to disk
-  write_csv(balances_rolling100, path=paste0("../data/balances_t_", blockid,".csv"))
+  write_csv(balances_rolling20, path=paste0("../data/balances_t_", blockid,".csv"))
   print("Balances saved to disk.")
 }
 
@@ -249,10 +249,10 @@ daily_withdrawals <- trx %>% filter(credit=="CASH") %>%
 # print(daily_withdrawals)
 knitr::kable(daily_deposits, digits=1, format.args= c(big.mark=","))
 
-daily_cash_stats <- full_join(daily_deposits, daily_withdrawals)
+daily_cash_stats <- full_join(daily_deposits, daily_withdrawals, by="date")
 
 write_csv(daily_cash_stats, path="../data/daily_cash_stats_t_1.csv")
-print("Daily cash stats saved to disk.")
+cat("Daily cash stats saved to disk.\n")
 
 ## Now repeat on 100 transaction blocks. 
 
@@ -271,13 +271,13 @@ f_dailycashstats <- function(trxblock) {
   group_by(date=as.Date(time)) %>% 
   summarise(daily_withdrawal = sum(amount),
             mean_withdrawal = mean(amount))
-  daily_cash_stats <- full_join(daily_deposits, daily_withdrawals)
+  daily_cash_stats <- full_join(daily_deposits, daily_withdrawals, by="date")
   return(daily_cash_stats)
 }
 
 ## Initialize on first block
 
-trx <- read_csv("trx_block_1.csv", col_types="ccciT")
+trx <- read_csv("trx_block_1.csv", col_types="ccciT", progress=FALSE)
 f_dailycashstats(trxblock = trx)
 
 ## Calculate the number of blocks from CSV names
@@ -294,7 +294,7 @@ for(blockcounter in 2:n_blocks) {
   current_block_cash <- f_dailycashstats(trxblock = trx)
   ## Join to prior 
   daily_cash_stats <- bind_rows(daily_cash_stats, current_block_cash)
-  print("Daily cash averages complete.")
+  cat("Daily cash averages complete. \n")
 }
 
 write_csv(daily_cash_stats, path="../data/daily_cash_stats.csv")

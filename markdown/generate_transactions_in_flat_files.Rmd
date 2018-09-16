@@ -2,7 +2,7 @@
 title: "R Notebook"
 output: html_notebook
 author: Ben Mazzotta
-date: 6 September 2018
+date: 15 September 2018
 ---
 
 
@@ -73,7 +73,7 @@ Now that we have initialized the user accounts with deposits from "CASH" to thei
 
 ```{r transactionblocks}
 
-n_trx_per_block = 10^6
+n_trx_per_block = 10^7
 n_blocks = 100
 
 for (i in 1:n_blocks) {
@@ -88,9 +88,9 @@ for (i in 1:n_blocks) {
     mutate(debit = ifelse(test = trxtype=="deposit", "CASH", sample(accountID)),
            credit = ifelse(test = trxtype=="withdrawal", "CASH", sample(accountID)),
            amount = round(rnorm(n=n_trx_per_block, mean=100, sd=20)),
-           time=  as.POSIXct(c(1:n_trx_per_block) - 1 + i * 10 * n_trx_per_block, origin=time_origin, tz="EST"))
+           time=  as.POSIXct(c(1:n_trx_per_block) - 1 + i * 1.2 * n_trx_per_block, origin=time_origin, tz="EST"))
   write_csv(trx, path=paste0("../data/trx_block_", i,".csv"))
-  cat("File chunk ", i, "saved to disk. at ", paste0("trx_block_",i,".csv") , " \n")
+  if (i %% 10 == 0) {cat("File chunk ", i, "saved to disk at ", paste0("trx_block_",i,".csv") , ".\n")} else {} 
 }
 
 ```
